@@ -1,0 +1,349 @@
+import { useEffect, useState } from 'react'
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+
+export default function TryOnModal({
+  avatarUrl,
+  selectedCloth,
+  wardrobe,
+  onClose
+}) {
+  const [currentCloth, setCurrentCloth] = useState(selectedCloth)
+  const [resultImageUrl, setResultImageUrl] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    setCurrentCloth(selectedCloth)
+  }, [selectedCloth])
+
+  useEffect(() => {
+    if (currentCloth && avatarUrl) {
+      renderTryOn()
+    }
+  }, [currentCloth, avatarUrl])
+
+  const renderTryOn = async () => {
+    if (!currentCloth || !avatarUrl) return
+
+    setLoading(true)
+    setError(null)
+    setResultImageUrl(null)
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/try-on`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          avatarUrl,
+          clothImageUrl: currentCloth.imageUrl,
+          category: currentCloth.category,
+          clothName: currentCloth.name
+        })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Could not generate try-on result')
+      }
+
+      setResultImageUrl(data.imageUrl)
+    } catch (renderError) {
+      console.error(renderError)
+      setError(renderError.message || 'Could not generate try-on preview')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const saveAsPhoto = async () => {
+    if (!resultImageUrl) return
+
+    try {
+      const response = await fetch(resultImageUrl)
+      const blob = await response.blob()
+      const blobUrl = URL.createObjectURL(blob)
+
+      const link = document.createElement('a')
+      link.download = `styleai-outfit-${Date.now()}.png`
+      link.href = blobUrl
+      link.click()
+
+      URL.revokeObjectURL(blobUrl)
+    } catch (saveError) {
+      console.error(saveError)
+      setError('Could not save try-on image')
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.85)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '20px'
+      }}
+    >
+      <div
+        style={{
+          background: 'white',
+          borderRadius: '24px',
+          padding: '24px',
+          width: '100%',
+          maxWidth: '980px',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          display: 'flex',
+          gap: '24px'
+        }}
+      >
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h2 style={{ fontSize: '20px', fontWeight: '600', margin: 0 }}>
+                AI try on
+              </h2>
+              <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#6b7280' }}>
+                Hugging Face virtual try-on is generating a wrapped outfit on your avatar.
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              style={{
+                background: 'none',
+                border: 'none',
+                fontSize: '24px',
+                cursor: 'pointer',
+                color: '#666',
+                padding: '4px 8px'
+              }}
+            >
+              x
+            </button>
+          </div>
+
+          <div
+            style={{
+              position: 'relative',
+              minHeight: '700px',
+              borderRadius: '16px',
+              background: '#f9f9f9',
+              border: '1px solid #eee',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            {resultImageUrl && !loading && (
+              <img
+                src={resultImageUrl}
+                alt={`Try-on result for ${currentCloth?.name || 'selected outfit'}`}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  display: 'block'
+                }}
+              />
+            )}
+
+            {loading && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '14px',
+                  background: 'rgba(255,255,255,0.88)',
+                  zIndex: 10
+                }}
+              >
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    border: '3px solid #eee',
+                    borderTopColor: '#F97316',
+                    borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite'
+                  }}
+                />
+                <div style={{ textAlign: 'center' }}>
+                  <p style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#111827' }}>
+                    Wrapping garment on your avatar
+                  </p>
+                  <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#6b7280' }}>
+                    This can take around 20 to 60 seconds.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {!resultImageUrl && !loading && !error && (
+              <div style={{ padding: '24px', textAlign: 'center', color: '#6b7280', fontSize: '14px' }}>
+                Select an outfit to generate a try-on result.
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div
+              style={{
+                background: '#fef2f2',
+                color: '#dc2626',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                fontSize: '14px'
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={renderTryOn}
+              disabled={!currentCloth || loading}
+              style={{
+                flex: 1,
+                padding: '12px',
+                borderRadius: '12px',
+                border: '1px solid #e5e7eb',
+                background: 'white',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                color: '#374151',
+                opacity: loading ? 0.7 : 1
+              }}
+            >
+              Regenerate
+            </button>
+            <button
+              onClick={saveAsPhoto}
+              disabled={!resultImageUrl || loading}
+              style={{
+                flex: 1,
+                padding: '12px',
+                borderRadius: '12px',
+                border: 'none',
+                background: '#111827',
+                color: 'white',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: resultImageUrl && !loading ? 'pointer' : 'not-allowed',
+                opacity: resultImageUrl && !loading ? 1 : 0.7
+              }}
+            >
+              Save as photo
+            </button>
+          </div>
+        </div>
+
+        <div
+          style={{
+            width: '200px',
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px'
+          }}
+        >
+          <p
+            style={{
+              fontSize: '13px',
+              fontWeight: '600',
+              color: '#374151',
+              margin: 0
+            }}
+          >
+            Select outfit
+          </p>
+
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+              overflowY: 'auto',
+              maxHeight: '500px'
+            }}
+          >
+            {wardrobe.length === 0 && (
+              <p style={{ fontSize: '12px', color: '#9ca3af' }}>
+                No clothes in wardrobe yet
+              </p>
+            )}
+            {wardrobe.map(cloth => (
+              <div
+                key={cloth.id}
+                onClick={() => setCurrentCloth(cloth)}
+                style={{
+                  cursor: 'pointer',
+                  borderRadius: '12px',
+                  overflow: 'hidden',
+                  border: currentCloth?.id === cloth.id
+                    ? '2px solid #F97316'
+                    : '2px solid transparent',
+                  background: '#f9f9f9',
+                  transition: 'border-color 0.2s'
+                }}
+              >
+                <img
+                  src={cloth.imageUrl}
+                  alt={cloth.name}
+                  style={{
+                    width: '100%',
+                    height: '110px',
+                    objectFit: 'cover',
+                    display: 'block'
+                  }}
+                  crossOrigin="anonymous"
+                />
+                <p
+                  style={{
+                    fontSize: '11px',
+                    color: '#6b7280',
+                    padding: '6px 8px',
+                    margin: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {cloth.name}
+                </p>
+                <p
+                  style={{
+                    fontSize: '10px',
+                    color: '#9ca3af',
+                    padding: '0 8px 8px',
+                    margin: 0
+                  }}
+                >
+                  {cloth.category}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+    </div>
+  )
+}
