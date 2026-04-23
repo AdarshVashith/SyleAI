@@ -20,6 +20,7 @@ console.log('Keys loaded:')
 console.log('SERPAPI_KEY:', process.env.SERPAPI_KEY ? 'SET' : 'MISSING')
 console.log('REMOVEBG_API_KEY:', process.env.REMOVEBG_API_KEY ? 'SET' : 'MISSING')
 console.log('REPLICATE_API_KEY:', process.env.REPLICATE_API_KEY ? 'SET' : 'MISSING')
+console.log('GROQ_API_KEY:', process.env.GROQ_API_KEY ? 'SET' : 'MISSING')
 
 const app = express()
 
@@ -36,6 +37,44 @@ app.use((req, res, next) => {
 })
 
 app.use(express.json({ limit: '50mb' }))
+
+async function requireAuth(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : null
+
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Missing authorization token' })
+    }
+
+    const firebaseApiKey = process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY
+    if (!firebaseApiKey) {
+      return res.status(500).json({ success: false, error: 'Firebase API key not configured for auth verification' })
+    }
+
+    const verifyResponse = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: token })
+      }
+    )
+
+    const verifyData = await verifyResponse.json()
+    if (!verifyResponse.ok || !verifyData.users?.length) {
+      return res.status(401).json({ success: false, error: 'Invalid or expired token' })
+    }
+
+    req.user = verifyData.users[0]
+    next()
+  } catch (error) {
+    console.error('Auth verification error:', error.message)
+    return res.status(401).json({ success: false, error: 'Authentication failed' })
+  }
+}
 
 // Health check
 app.get('/', (req, res) => {
@@ -89,6 +128,44 @@ async function getKolorsTryOnClient() {
   }
 
   return gradioClientPromise
+}
+
+async function createGroqJsonResponse({ systemPrompt, userPrompt, maxTokens = 1000 }) {
+  if (!process.env.GROQ_API_KEY || process.env.GROQ_API_KEY === 'your_key_here') {
+    throw new Error('GROQ_API_KEY missing or not configured')
+  }
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ]
+    })
+  })
+
+  const data = await response.json()
+  if (!response.ok) {
+    throw new Error(data?.error?.message || 'Groq request failed')
+  }
+
+  const responseText = data?.choices?.[0]?.message?.content
+  if (!responseText) {
+    throw new Error('Groq returned an empty response')
+  }
+
+  return {
+    rawText: responseText,
+    parsed: JSON.parse(responseText)
+  }
 }
 
 // ENDPOINT 1 — Generate avatar with Replicate Flux
@@ -174,41 +251,72 @@ app.post('/api/generate-avatar', async (req, res) => {
   }
 })
 
-// ENDPOINT 2 — Virtual try-on with Hugging Face Space
+// ENDPOINT 2 — Virtual try-on with Replicate IDM-VTON
 app.post('/api/try-on', async (req, res) => {
   try {
     const { avatarUrl, clothImageUrl, category, clothName } = req.body
 
-    console.log('=== Virtual Try-On ===')
+    console.log('=== Virtual Try-On (IDM-VTON) ===')
     console.log({ avatarUrl, clothImageUrl, category, clothName })
 
-    if (!avatarUrl) {
-      throw new Error('No avatar URL provided')
+    if (!avatarUrl) throw new Error('No avatar URL provided')
+    if (!clothImageUrl) throw new Error('No cloth image URL provided')
+
+    // Map frontend category to IDM-VTON category ('upper_body', 'lower_body', 'dresses')
+    let idmCategory = 'upper_body'
+    const lowerCat = (category || '').toLowerCase()
+    
+    if (['bottom', 'lower_body', 'pants', 'shorts'].includes(lowerCat)) {
+      idmCategory = 'lower_body'
+    } else if (['dress', 'dresses', 'skirt'].includes(lowerCat)) {
+      idmCategory = 'dresses'
     }
 
-    if (!clothImageUrl) {
-      throw new Error('No cloth image URL provided')
+    const startResponse = await fetch(
+      'https://api.replicate.com/v1/predictions',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.REPLICATE_API_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'wait'
+        },
+        body: JSON.stringify({
+          version: 'e3893af4fb4bd5741752b35b395348c5f7a9ab5c4776264f5d38e41418081ed7',
+          input: {
+            garm_img: clothImageUrl,
+            human_img: avatarUrl,
+            category: idmCategory,
+            garment_des: clothName || (idmCategory === 'lower_body' ? 'shorts / pants' : 'shirt / top'),
+            crop: false,
+            steps: 30
+          }
+        })
+      }
+    )
+
+    if (!startResponse.ok) {
+      const errData = await startResponse.json()
+      throw new Error(errData.detail || errData.error || JSON.stringify(errData))
     }
 
-    const { handle_file } = await import('@gradio/client')
-    const client = await getKolorsTryOnClient()
-    const randomSeed = Math.floor(Math.random() * 1000000)
+    let result = await startResponse.json()
+    console.log('Try-On Prediction ID:', result.id)
 
-    const result = await client.predict(2, [
-      handle_file(avatarUrl),
-      handle_file(clothImageUrl),
-      randomSeed,
-      true
-    ])
-
-    const imageData = result?.data?.[0]
-
-    if (!imageData?.url) {
-      throw new Error('No try-on image received from Hugging Face')
+    if (result.status !== 'succeeded' && result.status !== 'failed') {
+      result = await waitForReplicatePrediction(result.id)
     }
 
-    const outputImageResponse = await fetch(imageData.url)
+    if (result.status === 'failed') {
+      throw new Error('Try-on failed: ' + (result.error || 'Unknown'))
+    }
 
+    const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output
+    if (!outputUrl) {
+      throw new Error('No output image received from try-on')
+    }
+
+    const outputImageResponse = await fetch(outputUrl)
     if (!outputImageResponse.ok) {
       throw new Error(`Could not download try-on image (${outputImageResponse.status})`)
     }
@@ -221,8 +329,8 @@ app.post('/api/try-on', async (req, res) => {
     res.json({
       success: true,
       imageUrl: dataUrl,
-      provider: 'huggingface',
-      space: 'Kwai-Kolors/Kolors-Virtual-Try-On'
+      provider: 'replicate',
+      space: 'cuuupid/idm-vton'
     })
   } catch (err) {
     console.error('Try-on error:', err.message)
@@ -377,6 +485,212 @@ app.post('/api/remove-bg', async (req, res) => {
   }
 })
 
+// ENDPOINT 5 — Generate Outfit of the Day with Groq
+app.post('/api/generate-outfit', async (req, res) => {
+  try {
+    const { occasion, timeOfDay, destination, vibe, weather, profile, wardrobe } = req.body
+
+    console.log('=== Generate Outfit Recommendation ===')
+    console.log({ occasion, timeOfDay, destination, vibe, weather })
+
+    const systemPrompt = `You are a professional fashion stylist AI. 
+    You select outfits from a user's existing wardrobe.
+    Always respond with ONLY valid JSON. No markdown, no explanation outside the JSON object.`
+
+    const wardrobeList = wardrobe.map(item => 
+      `- ID: ${item.id}, Name: ${item.name}, Category: ${item.category}, Color: ${item.color}`
+    ).join('\n')
+
+    const userPrompt = `
+    Please recommend an outfit from my wardrobe based on the following context:
+
+    USER PROFILE:
+    - Gender: ${profile.gender}
+    - Body Type: ${profile.bodyType}
+    - Skin Tone: ${profile.skinTone}
+
+    CURRENT WEATHER:
+    - Temperature: ${weather.temp}°C
+    - Condition: ${weather.description}
+
+    DAILY CONTEXT:
+    - Occasion: ${occasion}
+    - Time of Day: ${timeOfDay}
+    - Destination: ${destination}
+    - Vibe/Goal: ${vibe}
+
+    AVAILABLE WARDROBE ITEMS:
+    ${wardrobeList}
+
+    INSTRUCTIONS:
+    1. Select 2-3 items from the wardrobe list that would make a great cohesive outfit for this specific occasion and weather.
+    2. Provide a creative name for the outfit (2-4 words).
+    3. Explain why this works (2-3 sentences), mentioning the temperature and skin tone.
+    4. Provide a style score (70-98).
+    5. Include 3 complementary hex colors for this look.
+    6. Add one short hair tip.
+
+    JSON SCHEMA TO RETURN:
+    {
+      "success": true,
+      "outfitName": "string",
+      "whyThisWorks": "string",
+      "items": [
+        { "id": "string", "name": "string", "category": "string", "color": "string", "imageUrl": "string", "reason": "string" }
+      ],
+      "hairTip": "string",
+      "colorPalette": ["#hex1", "#hex2", "#hex3"],
+      "styleScore": number
+    }
+    `
+
+    const groqResponse = await createGroqJsonResponse({
+      systemPrompt,
+      userPrompt,
+      maxTokens: 800
+    })
+    console.log('Groq Raw Response:', groqResponse.rawText)
+
+    try {
+      const outfitRecommendation = groqResponse.parsed
+      
+      // Ensure imageUrls are preserved from the original wardrobe
+      outfitRecommendation.items = outfitRecommendation.items.map(recItem => {
+        const originalItem = wardrobe.find(w => w.id === recItem.id)
+        return {
+          ...recItem,
+          imageUrl: originalItem ? originalItem.imageUrl : recItem.imageUrl
+        }
+      })
+
+      res.json(outfitRecommendation)
+    } catch (parseError) {
+      console.error('Failed to parse Groq response:', parseError)
+      res.status(500).json({ success: false, error: 'AI generated invalid response format' })
+    }
+
+  } catch (err) {
+    console.error('Outfit generation error:', err.message)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+// ENDPOINT 6 — Discover Wardrobe Gaps
+app.post('/api/discover-items', requireAuth, async (req, res) => {
+  try {
+    const { wardrobe, profile } = req.body
+
+    console.log('=== Discover Items ===')
+    console.log('Authenticated user:', req.user?.localId || 'unknown')
+
+    if (!Array.isArray(wardrobe)) {
+      throw new Error('Wardrobe must be an array')
+    }
+
+    if (!profile || typeof profile !== 'object') {
+      throw new Error('Profile is required')
+    }
+
+    const systemPrompt = `You are a fashion buyer AI. Analyze a user's wardrobe and recommend specific items they need.
+Respond with ONLY valid JSON. No markdown, no preamble.`
+
+    const wardrobeList = wardrobe.length > 0
+      ? wardrobe
+          .map(item => `- Name: ${item.name || 'Unnamed item'}, Category: ${item.category || 'Unknown'}, Color: ${item.color || 'Unknown'}`)
+          .join('\n')
+      : 'No items in wardrobe'
+
+    const userPrompt = `
+    Profile summary:
+    - Gender: ${profile?.gender || 'Unknown'}
+    - Age: ${profile?.age || 'Unknown'}
+    - Body Type: ${profile?.bodyType || 'Unknown'}
+    - Skin Tone: ${profile?.skinTone || 'Unknown'}
+
+    Current wardrobe inventory:
+    ${wardrobeList}
+
+    What 6 items should this person buy next? For each item provide:
+    name (specific product name), category, reason (why they need it, mention wardrobe gaps),
+    matchScore (60-98, how well it fills a gap), estimatedPrice (USD integer),
+    searchQuery (a Google Shopping search string for this exact item)
+
+    Expected response JSON:
+    {
+      "items": [
+        {
+          "name": "White Oxford Button-Down Shirt",
+          "category": "Shirt",
+          "reason": "No formal shirts in wardrobe — needed for Work occasions",
+          "matchScore": 92,
+          "estimatedPrice": 45,
+          "searchQuery": "white oxford button down shirt men slim fit"
+        }
+      ]
+    }
+    `
+
+    const groqResponse = await createGroqJsonResponse({
+      systemPrompt,
+      userPrompt,
+      maxTokens: 1000
+    })
+    console.log('Groq Raw Response for Discover:', groqResponse.rawText)
+
+    let parsedResponse
+    try {
+      parsedResponse = groqResponse.parsed
+    } catch (parseError) {
+      console.error('Failed to parse Groq response:', parseError)
+      return res.status(500).json({ success: false, error: 'AI generated invalid response format' })
+    }
+
+    const items = Array.isArray(parsedResponse.items) ? parsedResponse.items.slice(0, 6) : []
+    const enrichedItems = await Promise.all(
+      items.map(async (item) => {
+        const enrichedItem = {
+          name: item.name || 'Recommended item',
+          category: item.category || 'Accessory',
+          reason: item.reason || 'Recommended to strengthen a wardrobe gap.',
+          matchScore: Math.max(60, Math.min(98, Number(item.matchScore) || 60)),
+          estimatedPrice: Math.max(1, Math.round(Number(item.estimatedPrice) || 25)),
+          searchQuery: item.searchQuery || item.name || 'fashion item'
+        }
+
+        if (!process.env.SERPAPI_KEY) {
+          return enrichedItem
+        }
+
+        try {
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), 2500)
+          const serpUrl = `https://serpapi.com/search.json?engine=google_shopping&q=${encodeURIComponent(enrichedItem.searchQuery)}&api_key=${process.env.SERPAPI_KEY}&num=1`
+          const serpRes = await fetch(serpUrl, { signal: controller.signal })
+          clearTimeout(timeout)
+          const serpData = await serpRes.json()
+
+          if (serpData.shopping_results && serpData.shopping_results.length > 0) {
+            const result = serpData.shopping_results[0]
+            enrichedItem.productImageUrl = result.thumbnail
+            enrichedItem.productLink = result.link
+            enrichedItem.productSource = result.source
+          }
+        } catch (e) {
+          console.error('SerpAPI error for item', item.name, e.message || e)
+        }
+
+        return enrichedItem
+      })
+    )
+
+    res.json({ success: true, items: enrichedItems })
+
+  } catch (err) {
+    console.error('Discover items error:', err.message)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
 const PORT = Number(process.env.PORT || 3001)
 
 const server = app.listen(PORT, () => {
@@ -386,6 +700,8 @@ const server = app.listen(PORT, () => {
   console.log('  POST /api/try-on')
   console.log('  POST /api/visual-search')
   console.log('  POST /api/remove-bg')
+  console.log('  POST /api/generate-outfit')
+  console.log('  POST /api/discover-items')
 })
 
 server.on('error', (err) => {

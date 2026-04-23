@@ -1,0 +1,6 @@
+styleai/.env
+styleai/backend/.env
+styleai/node_modules/
+styleai/backend/node_modules/
+styleai/dist/
+.DS_Store

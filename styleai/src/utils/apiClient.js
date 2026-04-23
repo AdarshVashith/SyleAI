@@ -1,0 +1,29 @@
+import { auth } from '../firebase/firebase'
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+
+export default async function callBackend(path, body) {
+  const user = auth.currentUser
+
+  if (!user) {
+    throw new Error('You need to be signed in to continue.')
+  }
+
+  const token = await user.getIdToken()
+  const response = await fetch(`${BACKEND_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(body)
+  })
+
+  const data = await response.json()
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || 'Request failed')
+  }
+
+  return data
+}

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { auth } from '../../../firebase/firebase'
+import { saveToWishlist } from '../../Wishlist'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
 
@@ -12,6 +14,8 @@ export default function TryOnModal({
   const [resultImageUrl, setResultImageUrl] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [wishlistSaved, setWishlistSaved] = useState(false)
+  const [wishlistSaving, setWishlistSaving] = useState(false)
 
   useEffect(() => {
     setCurrentCloth(selectedCloth)
@@ -74,6 +78,27 @@ export default function TryOnModal({
     } catch (saveError) {
       console.error(saveError)
       setError('Could not save try-on image')
+    }
+  }
+
+  const handleSaveToWishlist = async () => {
+    const user = auth.currentUser
+    if (!user || !currentCloth) return
+    setWishlistSaving(true)
+    try {
+      await saveToWishlist(user.uid, {
+        title: currentCloth.name,
+        imageUrl: currentCloth.imageUrl,
+        link: currentCloth.link || '',
+        source: 'My Wardrobe',
+        category: currentCloth.category
+      })
+      setWishlistSaved(true)
+      setTimeout(() => setWishlistSaved(false), 2500)
+    } catch (err) {
+      console.error('Save to wishlist error:', err)
+    } finally {
+      setWishlistSaving(false)
     }
   }
 
@@ -210,7 +235,7 @@ export default function TryOnModal({
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '12px' }}>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
             <button
               onClick={renderTryOn}
               disabled={!currentCloth || loading}
@@ -246,6 +271,25 @@ export default function TryOnModal({
               }}
             >
               Save as photo
+            </button>
+            <button
+              onClick={handleSaveToWishlist}
+              disabled={!currentCloth || wishlistSaving}
+              style={{
+                width: '100%',
+                padding: '10px',
+                borderRadius: '12px',
+                border: '1px solid #e5e7eb',
+                background: wishlistSaved ? '#f0fdf4' : 'white',
+                color: wishlistSaved ? '#16a34a' : '#6b7280',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: currentCloth && !wishlistSaving ? 'pointer' : 'not-allowed',
+                opacity: currentCloth ? 1 : 0.5,
+                transition: 'all 0.2s'
+              }}
+            >
+              {wishlistSaved ? '✓ Saved to Wishlist' : wishlistSaving ? 'Saving…' : '♡ Save to Wishlist'}
             </button>
           </div>
         </div>

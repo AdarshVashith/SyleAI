@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import { 
   doc, getDoc, collection, 
-  getDocs, addDoc, updateDoc 
+  getDocs, addDoc, deleteDoc, updateDoc 
 } from 'firebase/firestore'
 import { db, auth } from '../../firebase/firebase'
 import { useNavigate } from 'react-router-dom'
 import ClothCard from './components/ClothCard'
 import UploadClothModal from './components/UploadClothModal'
 import TryOnModal from './components/TryOnModal'
+import { BottomTabNav } from '../../components/TabNav'
 
 export default function Wardrobe() {
   const navigate = useNavigate()
@@ -21,6 +22,7 @@ export default function Wardrobe() {
   const [selectedCloth, setSelectedCloth] = useState(null)
   const [filterCategory, setFilterCategory] = useState('All')
   const [error, setError] = useState(null)
+  const [seedingLoading, setSeedingLoading] = useState(false)
 
   const categories = [
     'All', 'Top', 'Bottom', 'Dress', 
@@ -120,6 +122,177 @@ export default function Wardrobe() {
     setShowTryOn(true)
   }
 
+  const seedWardrobe = async () => {
+    setSeedingLoading(true)
+    try {
+      setFilterCategory('All')
+      setError(null)
+      const existing = await getDocs(
+        collection(db, 'users', user.uid, 'wardrobe')
+      )
+      const deletePromises = existing.docs.map(d =>
+        deleteDoc(doc(db, 'users', user.uid, 'wardrobe', d.id))
+      )
+      await Promise.all(deletePromises)
+      setWardrobe([])
+
+      const sampleClothes = [
+        {
+          name: 'Classic White Oxford Shirt',
+          category: 'Top',
+          color: 'White',
+          occasion: 'Formal, Work',
+          brand: 'Uniqlo',
+          imageUrl: 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Navy Blue Casual T-Shirt',
+          category: 'Top',
+          color: 'Navy Blue',
+          occasion: 'Casual, Travel',
+          brand: 'H&M',
+          imageUrl: 'https://images.unsplash.com/photo-1581655353564-df123a1eb820?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Grey Melange Round Neck Tee',
+          category: 'Top',
+          color: 'Grey',
+          occasion: 'Casual, Home, Gym',
+          brand: 'Puma',
+          imageUrl: 'https://images.unsplash.com/photo-1618354691373-d851c5c3a990?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Black Graphic Print T-Shirt',
+          category: 'Top',
+          color: 'Black',
+          occasion: 'Casual, Party, Date Night',
+          brand: 'Zara',
+          imageUrl: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Light Blue Linen Shirt',
+          category: 'Top',
+          color: 'Light Blue',
+          occasion: 'Casual, Travel, Date Night',
+          brand: 'Marks & Spencer',
+          imageUrl: 'https://images.unsplash.com/photo-1602810318383-e386cc2a3ccf?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Dark Blue Slim Fit Jeans',
+          category: 'Bottom',
+          color: 'Dark Blue',
+          occasion: 'Casual, Date Night, Travel',
+          brand: "Levi's 511",
+          imageUrl: 'https://images.unsplash.com/photo-1542272604-787c3835535d?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Beige Slim Chino Pants',
+          category: 'Bottom',
+          color: 'Beige',
+          occasion: 'Work, Formal, Casual',
+          brand: 'Gap',
+          imageUrl: 'https://images.unsplash.com/photo-1473966968600-fa801b869a1a?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Olive Green Cargo Pants',
+          category: 'Bottom',
+          color: 'Olive Green',
+          occasion: 'Casual, Travel, Festival',
+          brand: 'H&M',
+          imageUrl: 'https://images.unsplash.com/photo-1594938298603-c8148c4dae35?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Black Formal Trousers',
+          category: 'Bottom',
+          color: 'Black',
+          occasion: 'Formal, Work, Party',
+          brand: 'Raymond',
+          imageUrl: 'https://images.unsplash.com/photo-1624378439575-d8705ad7ae80?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Grey Jogger Sweatpants',
+          category: 'Bottom',
+          color: 'Grey',
+          occasion: 'Home, Gym, Casual',
+          brand: 'Nike',
+          imageUrl: 'https://images.unsplash.com/photo-1606107557195-0e29a4b5b4aa?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Black Slim Fit Blazer',
+          category: 'Jacket',
+          color: 'Black',
+          occasion: 'Formal, Work, Party, Date Night',
+          brand: 'Zara',
+          imageUrl: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Light Blue Denim Jacket',
+          category: 'Jacket',
+          color: 'Light Blue',
+          occasion: 'Casual, Travel, Festival',
+          brand: "Levi's",
+          imageUrl: 'https://images.unsplash.com/photo-1601333144130-8cbb312386b6?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'White Leather Sneakers',
+          category: 'Shoes',
+          color: 'White',
+          occasion: 'Casual, Date Night, Travel',
+          brand: 'Nike Air Force',
+          imageUrl: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Black Oxford Formal Shoes',
+          category: 'Shoes',
+          color: 'Black',
+          occasion: 'Formal, Work, Party',
+          brand: 'Clarks',
+          imageUrl: 'https://images.unsplash.com/photo-1449505278894-297fdb3edbc1?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        },
+        {
+          name: 'Brown Casual Loafers',
+          category: 'Shoes',
+          color: 'Brown',
+          occasion: 'Casual, Work, Date Night',
+          brand: 'Hush Puppies',
+          imageUrl: 'https://images.unsplash.com/photo-1614252235316-8c857d38b5f4?w=400&fit=crop',
+          wearCount: 0, wearHistory: [], addedAt: new Date().toISOString()
+        }
+      ]
+
+      const addPromises = sampleClothes.map(async (cloth) => {
+        const docRef = await addDoc(
+          collection(db, 'users', user.uid, 'wardrobe'),
+          cloth
+        )
+        return { id: docRef.id, ...cloth }
+      })
+
+      const newItems = await Promise.all(addPromises)
+      await fetchData()
+      alert(`✓ Added ${newItems.length} clothes to your wardrobe!`)
+    } catch (err) {
+      setError('Seed failed: ' + err.message)
+      console.error(err)
+    } finally {
+      setSeedingLoading(false)
+    }
+  }
+
   const filteredWardrobe = filterCategory === 'All'
     ? wardrobe
     : wardrobe.filter(c => c.category === filterCategory)
@@ -140,14 +313,24 @@ export default function Wardrobe() {
       <div className="bg-white border-b border-gray-100 
         px-6 py-4 flex justify-between items-center sticky top-0 z-10">
         <h1 className="text-xl font-bold">My wardrobe</h1>
-        <button
-          onClick={() => setShowUploadModal(true)}
-          className="bg-gray-900 text-white px-4 py-2 
-            rounded-xl text-sm font-semibold 
-            hover:bg-gray-700 transition-all"
-        >
-          + Add cloth
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={seedWardrobe}
+            disabled={seedingLoading || !user}
+            className="border border-gray-200 bg-white text-gray-700 px-4 py-2 
+              rounded-xl text-sm font-semibold hover:bg-gray-50 transition-all disabled:opacity-50"
+          >
+            {seedingLoading ? 'Loading...' : '✦ Load samples'}
+          </button>
+          <button
+            onClick={() => setShowUploadModal(true)}
+            className="bg-gray-900 text-white px-4 py-2 
+              rounded-xl text-sm font-semibold 
+              hover:bg-gray-700 transition-all"
+          >
+            + Add cloth
+          </button>
+        </div>
       </div>
 
       {/* Category filter */}
@@ -207,22 +390,49 @@ export default function Wardrobe() {
         </div>
       )}
 
+      {wardrobe.length > 0 && wardrobe.length < 15 && (
+        <div className="mx-6 mb-4 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-700">
+          Sample wardrobe not fully loaded yet. Use `✦ Load samples` to replace the current items with the full sample wardrobe.
+        </div>
+      )}
+
       {/* Wardrobe grid */}
       <div className="px-6 pb-24">
         {filteredWardrobe.length === 0 ? (
-          <div className="flex flex-col items-center justify-center 
-            py-20 gap-4">
-            <p className="text-gray-400 text-lg">
-              No clothes yet
-            </p>
-            <button
-              onClick={() => setShowUploadModal(true)}
-              className="bg-gray-900 text-white px-6 py-3 
-                rounded-xl font-semibold hover:bg-gray-700"
-            >
-              Add your first cloth
-            </button>
-          </div>
+          wardrobe.length === 0 && !loading ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-4">
+              <div className="text-6xl">👕</div>
+              <p className="text-gray-600 font-semibold text-lg">Your wardrobe is empty</p>
+              <p className="text-gray-400 text-sm text-center px-8">
+                Add clothes manually or load sample items to get started
+              </p>
+              <button
+                onClick={seedWardrobe}
+                disabled={seedingLoading}
+                className="bg-black text-white px-8 py-3 rounded-2xl font-semibold text-sm disabled:opacity-50"
+              >
+                {seedingLoading ? 'Adding samples...' : '✦ Load Sample Wardrobe'}
+              </button>
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="border border-gray-200 text-gray-700 px-8 py-3 rounded-2xl font-semibold text-sm"
+              >
+                + Add My Own Clothes
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-20 gap-4">
+              <p className="text-gray-400 text-lg">
+                No clothes yet
+              </p>
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="bg-gray-900 text-white px-6 py-3 rounded-xl font-semibold hover:bg-gray-700"
+              >
+                Add your first cloth
+              </button>
+            </div>
+          )
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 
             lg:grid-cols-4 gap-4">
@@ -238,28 +448,7 @@ export default function Wardrobe() {
         )}
       </div>
 
-      {/* Bottom navigation */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white 
-        border-t border-gray-100 flex">
-        {[
-          { label: 'Home', path: '/home' },
-          { label: 'Wardrobe', path: '/wardrobe' },
-          { label: 'Wishlist', path: '/wishlist' },
-          { label: 'Me', path: '/me' }
-        ].map(tab => (
-          <button
-            key={tab.path}
-            onClick={() => navigate(tab.path)}
-            className={`flex-1 py-4 text-sm font-medium transition-all ${
-              tab.path === '/wardrobe'
-                ? 'text-gray-900 border-t-2 border-gray-900'
-                : 'text-gray-400'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <BottomTabNav />
 
       {/* Upload modal */}
       {showUploadModal && (

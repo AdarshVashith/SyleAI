@@ -3,7 +3,8 @@ import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { auth, db } from "../firebase/firebase";
-import { BottomTabNav, TopTabNav } from "../components/TabNav";
+import { BottomTabNav } from "../components/TabNav";
+import StyleScoreCard from "../components/StyleScoreCard";
 
 const getSuggestedColors = (skinToneHex) => {
   const r = parseInt(skinToneHex.slice(1, 3), 16);
@@ -150,7 +151,6 @@ function Home() {
           <h1 className="text-2xl font-bold text-gray-900 md:text-3xl">
             {`${greetingForCurrentTime()}, ${profile?.name || "there"}`}
           </h1>
-          <TopTabNav />
         </header>
 
         {profileLoading ? (
@@ -181,7 +181,7 @@ function Home() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => navigate('/wardrobe')}
+                  onClick={() => navigate('/generate-outfit')}
                   style={{
                     width: '100%',
                     padding: '12px',
@@ -193,6 +193,24 @@ function Home() {
                     border: 'none',
                     cursor: 'pointer',
                     marginTop: '12px'
+                  }}
+                >
+                  ✦ Generate Outfit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/wardrobe')}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'white',
+                    color: '#111827',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    border: '1px solid #e5e7eb',
+                    cursor: 'pointer',
+                    marginTop: '8px'
                   }}
                 >
                   Try on outfits
@@ -257,6 +275,10 @@ function Home() {
                   </div>
                 ))}
               </div>
+            </section>
+
+            <section>
+              <StyleScoreCard userId={user?.uid} />
             </section>
           </>
         )}

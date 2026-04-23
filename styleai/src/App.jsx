@@ -5,6 +5,8 @@ import { useNavigate } from "react-router-dom";
 import AuthPage from "./pages/auth/AuthPage";
 import { auth } from "./firebase/firebase";
 import GenerateModel from "./pages/GenerateModel";
+import GenerateOutfit from "./pages/GenerateOutfit";
+import Discover from "./pages/Discover";
 import Home from "./pages/Home";
 import Me from "./pages/Me";
 import OnboardingPage from "./pages/onboarding/OnboardingPage";
@@ -59,10 +61,26 @@ function App() {
         }
       />
       <Route
+        path="/generate-outfit"
+        element={
+          <ProtectedRoute>
+            <GenerateOutfit />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/home"
         element={
           <ProtectedRoute>
             <Home />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/discover"
+        element={
+          <ProtectedRoute>
+            <Discover />
           </ProtectedRoute>
         }
       />
