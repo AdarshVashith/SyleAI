@@ -11,11 +11,27 @@ function SkeletonCard() {
   return <div className="h-64 animate-pulse rounded-2xl bg-gray-100" />
 }
 
+function buildDiscoverCacheKey(userId, wardrobe, profile) {
+  const wardrobeSignature = wardrobe
+    .map((item) => `${item.name || ''}|${item.category || ''}|${item.color || ''}`)
+    .sort()
+    .join('||')
+  const profileSignature = [
+    profile.gender || '',
+    profile.bodyType || '',
+    profile.skinTone || '',
+    profile.age || ''
+  ].join('|')
+
+  return `discover-cache:${userId}:${wardrobeSignature}:${profileSignature}`
+}
+
 export default function Discover() {
-  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
   const navigate = useNavigate()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [filterCategory, setFilterCategory] = useState('All')
   const [error, setError] = useState('')
   const [user, setUser] = useState(null)
@@ -23,12 +39,12 @@ export default function Discover() {
   const [tryOnItem, setTryOnItem] = useState(null)
   const [tryOnLoading, setTryOnLoading] = useState(false)
   const [tryOnResult, setTryOnResult] = useState(null)
+  const [tryOnError, setTryOnError] = useState('')
   const [avatarUrl, setAvatarUrl] = useState(null)
 
   const fetchRecommendations = async (firebaseUser) => {
     if (!firebaseUser) return
 
-    setLoading(true)
     setError('')
 
     try {
@@ -48,7 +64,7 @@ export default function Discover() {
 
       const profile = profileSnap.data()
       setAvatarUrl(profile.avatarUrl || null)
-      const data = await callBackend('/api/discover-items', {
+      const discoverPayload = {
         wardrobe: wardrobe.map((item) => ({
           id: item.id,
           name: item.name,
@@ -61,14 +77,40 @@ export default function Discover() {
           skinTone: profile.skinTone || '',
           age: profile.age || ''
         }
-      })
+      }
 
-      setItems(Array.isArray(data.items) ? data.items : [])
+      const cacheKey = buildDiscoverCacheKey(firebaseUser.uid, discoverPayload.wardrobe, discoverPayload.profile)
+      const cachedItems = localStorage.getItem(cacheKey)
+
+      if (cachedItems) {
+        try {
+          const parsedCache = JSON.parse(cachedItems)
+          if (Array.isArray(parsedCache) && parsedCache.length > 0) {
+            setItems(parsedCache)
+            setLoading(false)
+            setRefreshing(true)
+          } else {
+            setLoading(true)
+          }
+        } catch {
+          setLoading(true)
+        }
+      } else {
+        setLoading(true)
+      }
+
+      const data = await callBackend('/api/discover-items', discoverPayload)
+
+      const nextItems = Array.isArray(data.items) ? data.items : []
+      setItems(nextItems)
+      localStorage.setItem(cacheKey, JSON.stringify(nextItems))
+
     } catch (err) {
       console.error('Discover fetch error:', err)
       setError(err.message || 'Failed to load discover recommendations.')
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -114,26 +156,37 @@ export default function Discover() {
     }
   }
 
-  const handleTryOn = async () => {
-    if (!avatarUrl || !tryOnItem) return
+  const handleTryOn = async (itemOverride = null) => {
+    const activeItem = itemOverride || tryOnItem
+    if (!avatarUrl || !activeItem) return
     setTryOnLoading(true)
     setTryOnResult(null)
+    setTryOnError('')
     try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 95000)
       const res = await fetch(`${BACKEND_URL}/api/try-on`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           avatarUrl,
-          clothImageUrl: tryOnItem.imageUrl,
-          category: tryOnItem.category,
-          clothName: tryOnItem.name
+          clothImageUrl: activeItem.imageUrl,
+          category: activeItem.category,
+          clothName: activeItem.name
         })
       })
-      const data = await res.json()
+      clearTimeout(timeout)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'Try on failed')
+      }
       if (!data.success) throw new Error(data.error || 'Try on failed')
       setTryOnResult(data.imageUrl)
     } catch (err) {
-      alert('Try on failed: ' + err.message)
+      setTryOnError(err.name === 'AbortError'
+        ? 'Try-on timed out. The public queue is busy right now. Please try again.'
+        : err.message || 'Try on failed')
     } finally {
       setTryOnLoading(false)
     }
@@ -189,6 +242,12 @@ export default function Discover() {
         <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.3em] text-gray-400">
           Decision Grid
         </p>
+
+        {refreshing && !loading ? (
+          <p className="mb-3 text-xs text-gray-400">
+            Refreshing recommendations...
+          </p>
+        ) : null}
 
         {error && !loading ? (
           <div className="rounded-2xl border border-red-100 bg-white px-6 py-10 text-center">
@@ -275,6 +334,8 @@ export default function Discover() {
                             onClick={() => {
                               setTryOnItem(displayItem)
                               setTryOnResult(null)
+                              setTryOnError('')
+                              handleTryOn(displayItem)
                             }}
                             className="flex-1 rounded-xl bg-black text-xs text-white font-medium transition-colors hover:bg-gray-800 py-2"
                           >
@@ -300,7 +361,7 @@ export default function Discover() {
             <div className="mb-1 flex items-center justify-between">
               <h2 className="text-lg font-bold">Try On</h2>
               <button
-                onClick={() => { setTryOnItem(null); setTryOnResult(null) }}
+                onClick={() => { setTryOnItem(null); setTryOnResult(null); setTryOnError('') }}
                 className="text-3xl font-light leading-none text-gray-400"
               >
                 ×
@@ -343,7 +404,11 @@ export default function Discover() {
                 </div>
                 <div className="flex gap-3">
                   <button
-                    onClick={() => setTryOnResult(null)}
+                    onClick={() => {
+                      setTryOnResult(null)
+                      setTryOnError('')
+                      handleTryOn()
+                    }}
                     className="flex-1 rounded-xl border border-gray-200 py-3 text-sm font-semibold text-gray-700"
                   >
                     ← Try Again
@@ -396,12 +461,17 @@ export default function Discover() {
                   {tryOnLoading ? (
                     <span className="flex items-center justify-center gap-2">
                       <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      Generating try on... (30-60s)
+                      Generating try on... (up to 90s)
                     </span>
                   ) : '✦ Generate Virtual Try On'}
                 </button>
+                {tryOnError ? (
+                  <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-center text-xs text-red-600">
+                    {tryOnError}
+                  </div>
+                ) : null}
                 <p className="mt-2 text-center text-xs text-gray-400">
-                  Powered by Kolors AI · Takes 30–60 seconds
+                  Powered by Hugging Face Leffa · Public queue can take 30–90 seconds
                 </p>
               </div>
             )}

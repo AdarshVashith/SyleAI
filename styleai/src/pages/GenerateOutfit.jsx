@@ -99,6 +99,34 @@ export default function GenerateOutfit() {
         return 'deep cool skin — bright colors, whites, orange, lime create great contrast'
       }
 
+      const normaliseGender = (value) => {
+        const raw = String(value || '').toLowerCase().trim()
+        if (['male', 'man', 'men', 'boy'].includes(raw)) return 'male'
+        if (['female', 'woman', 'women', 'girl'].includes(raw)) return 'female'
+        return 'unspecified'
+      }
+
+      const sanitizeHairTip = (hairTip, gender) => {
+        if (!hairTip) return ''
+
+        const text = String(hairTip).trim()
+        if (gender === 'male') {
+          return text
+            .replace(/ponytail/gi, 'textured style')
+            .replace(/hair tie/gi, 'light styling product')
+            .replace(/clip your hair back/gi, 'keep the sides neat')
+            .replace(/tie your hair back/gi, 'style your hair neatly')
+        }
+
+        if (gender === 'female') {
+          return text
+            .replace(/buzz cut/gi, 'sleek tied-back style')
+            .replace(/fade haircut/gi, 'soft face-framing style')
+        }
+
+        return text
+      }
+
       const wardrobeText = wardrobe
         .map(c => `- "${c.name}" | Category: ${c.category} | Color: ${c.color || 'unknown'}`)
         .join('\n')
@@ -109,6 +137,13 @@ export default function GenerateOutfit() {
 
       const skinTone = profile?.skinTone || '#c68642'
       const skinAdvice = getSkinToneAdvice(skinTone)
+      const gender = normaliseGender(profile?.gender)
+      const genderStyleRule =
+        gender === 'male'
+          ? 'The user is MALE. Recommendations, outfit naming, styling logic, and hair tips must stay male-focused. Do not mention ponytails, dresses, skirts, handbags, heels, women, or feminine styling.'
+          : gender === 'female'
+            ? 'The user is FEMALE. Recommendations, outfit naming, styling logic, and hair tips must stay female-focused. Do not mention menswear, beards, fades, or masculine styling unless explicitly requested.'
+            : 'Gender is unspecified. Keep styling neutral and avoid gendered assumptions.'
 
       const occasionCategoryRules = {
         'Home': 'MUST include comfortable items like joggers, sweatpants, casual tees. NO formal items.',
@@ -134,10 +169,12 @@ STRICT RULES — YOU MUST FOLLOW ALL OF THESE:
 3. OCCASION RULE: ${categoryRule}
 4. Only select items that exist EXACTLY in the wardrobe list below
 5. Use the exact full item name as written in the wardrobe list
+6. ${genderStyleRule}
+7. Hair tip must match the user's gender presentation and must never reference the opposite gender
 
 USER DETAILS:
 - Skin tone: ${skinTone} — ${skinAdvice}
-- Gender: ${profile?.gender || 'male'}
+- Gender: ${gender}
 - Body type: ${profile?.bodyType || 'average'}
 - Age: ${profile?.age || 'young adult'}
 - ${weatherText}
@@ -178,7 +215,7 @@ Return ONLY this JSON (no markdown, no extra text):
   ],
   "whyThisWorks": "2-3 sentences: explain WHY these specific colors work together for ${skinAdvice}. Mention the specific color combination (e.g. navy + beige + brown) and the occasion.",
   "colorHarmony": "One sentence about the color palette and how it complements skin tone ${skinTone}.",
-  "hairTip": "One specific, practical hair tip for ${occasion} at ${timeOfDay}.",
+  "hairTip": "One specific, practical ${gender === 'male' ? 'male grooming / hairstyle' : gender === 'female' ? 'female hairstyle / grooming' : 'gender-neutral grooming'} tip for ${occasion} at ${timeOfDay}.",
   "colorPalette": ["#hex of item 1 color", "#hex of item 2 color", "#hex of item 3 color"]
 }`
 
@@ -256,7 +293,11 @@ Return ONLY this JSON (no markdown, no extra text):
         return true
       })
 
-      const outfitResult = { ...parsed, items: dedupedItems }
+      const outfitResult = {
+        ...parsed,
+        hairTip: sanitizeHairTip(parsed.hairTip, gender),
+        items: dedupedItems
+      }
       setResult(outfitResult)
       setScreen('result')
 

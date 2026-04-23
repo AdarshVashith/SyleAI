@@ -16,7 +16,7 @@ export async function saveToWishlist(userId, item) {
 }
 
 function Wishlist() {
-  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
   const navigate = useNavigate()
   const [user, setUser] = useState(null)
   const [wishlist, setWishlist] = useState([])
@@ -26,6 +26,7 @@ function Wishlist() {
   const [tryOnItem, setTryOnItem] = useState(null)
   const [tryOnLoading, setTryOnLoading] = useState(false)
   const [tryOnResult, setTryOnResult] = useState(null)
+  const [tryOnError, setTryOnError] = useState('')
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -67,28 +68,39 @@ function Wishlist() {
     }
   }
 
-  const handleTryOn = async () => {
-    if (!avatarUrl || !tryOnItem?.imageUrl) return
+  const handleTryOn = async (itemOverride = null) => {
+    const activeItem = itemOverride || tryOnItem
+    if (!avatarUrl || !activeItem?.imageUrl) return
 
     setTryOnLoading(true)
     setTryOnResult(null)
+    setTryOnError('')
 
     try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 95000)
       const res = await fetch(`${BACKEND_URL}/api/try-on`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           avatarUrl,
-          clothImageUrl: tryOnItem.imageUrl,
-          category: tryOnItem.category || 'Top',
-          clothName: tryOnItem.title || 'Wishlist item'
+          clothImageUrl: activeItem.imageUrl,
+          category: activeItem.category || 'Top',
+          clothName: activeItem.title || 'Wishlist item'
         })
       })
-      const data = await res.json()
+      clearTimeout(timeout)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'Try on failed')
+      }
       if (!data.success) throw new Error(data.error || 'Try on failed')
       setTryOnResult(data.imageUrl)
     } catch (err) {
-      alert('Try on failed: ' + err.message)
+      setTryOnError(err.name === 'AbortError'
+        ? 'Try-on timed out. The public queue is busy right now. Please try again.'
+        : err.message || 'Try on failed')
     } finally {
       setTryOnLoading(false)
     }
@@ -166,6 +178,8 @@ function Wishlist() {
                       onClick={() => {
                         setTryOnItem(item)
                         setTryOnResult(null)
+                        setTryOnError('')
+                        handleTryOn(item)
                       }}
                       disabled={!item.imageUrl}
                       className="flex-1 rounded-lg bg-black py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-40"
@@ -198,6 +212,7 @@ function Wishlist() {
                 onClick={() => {
                   setTryOnItem(null)
                   setTryOnResult(null)
+                  setTryOnError('')
                 }}
                 className="text-3xl font-light leading-none text-gray-400"
               >
@@ -241,7 +256,11 @@ function Wishlist() {
                 </div>
                 <div className="flex gap-3">
                   <button
-                    onClick={() => setTryOnResult(null)}
+                    onClick={() => {
+                      setTryOnResult(null)
+                      setTryOnError('')
+                      handleTryOn()
+                    }}
                     className="flex-1 rounded-xl border border-gray-200 py-3 text-sm font-semibold text-gray-700"
                   >
                     ← Try Again
@@ -294,12 +313,17 @@ function Wishlist() {
                   {tryOnLoading ? (
                     <span className="flex items-center justify-center gap-2">
                       <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      Generating try on... (30-60s)
+                      Generating try on... (up to 90s)
                     </span>
                   ) : '✦ Generate Virtual Try On'}
                 </button>
+                {tryOnError ? (
+                  <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-center text-xs text-red-600">
+                    {tryOnError}
+                  </div>
+                ) : null}
                 <p className="mt-2 text-center text-xs text-gray-400">
-                  Powered by Kolors AI · Takes 30–60 seconds
+                  Powered by Hugging Face Leffa · Public queue can take 30–90 seconds
                 </p>
               </div>
             )}

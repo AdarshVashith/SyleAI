@@ -1,9 +1,12 @@
 const express = require('express')
 const fetch = require('node-fetch')
 const FormData = require('form-data')
+const fs = require('fs/promises')
+const os = require('os')
+const path = require('path')
 let gradioClientPromise = null
 require('dotenv').config({ 
-  path: require('path').resolve(__dirname, '.env') 
+  path: path.resolve(__dirname, '.env') 
 })
 console.log('SERPAPI_KEY value:', 
   process.env.SERPAPI_KEY 
@@ -15,7 +18,7 @@ console.log('REMOVEBG_API_KEY value:',
     ? process.env.REMOVEBG_API_KEY.substring(0, 5) + '...' 
     : 'NOT FOUND'
 )
-console.log('.env file path:', require('path').resolve('.env'))
+console.log('.env file path:', path.resolve('.env'))
 console.log('Keys loaded:')
 console.log('SERPAPI_KEY:', process.env.SERPAPI_KEY ? 'SET' : 'MISSING')
 console.log('REMOVEBG_API_KEY:', process.env.REMOVEBG_API_KEY ? 'SET' : 'MISSING')
@@ -120,14 +123,56 @@ async function waitForReplicatePrediction(predictionId) {
   throw new Error('Replicate prediction timed out')
 }
 
-async function getKolorsTryOnClient() {
+async function getLeffaTryOnClient() {
   if (!gradioClientPromise) {
     gradioClientPromise = import('@gradio/client').then(async module => {
-      return module.Client.connect('Kwai-Kolors/Kolors-Virtual-Try-On')
+      return module.Client.connect('franciszzj/Leffa')
     })
   }
 
   return gradioClientPromise
+}
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms)
+    })
+  ])
+}
+
+async function downloadImageToTempFile(imageUrl, prefix) {
+  const response = await fetch(imageUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 StyleAI/1.0',
+      'Accept': 'image/*,*/*;q=0.8'
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error(`Could not download source image (${response.status})`)
+  }
+
+  const contentType = response.headers.get('content-type') || 'image/jpeg'
+  if (!contentType.startsWith('image/')) {
+    throw new Error('Source URL did not return an image')
+  }
+
+  const extension = contentType.includes('png')
+    ? 'png'
+    : contentType.includes('webp')
+      ? 'webp'
+      : 'jpg'
+
+  const buffer = await response.buffer()
+  const tempFilePath = path.join(
+    os.tmpdir(),
+    `styleai-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`
+  )
+
+  await fs.writeFile(tempFilePath, buffer)
+  return tempFilePath
 }
 
 async function createGroqJsonResponse({ systemPrompt, userPrompt, maxTokens = 1000 }) {
@@ -135,24 +180,60 @@ async function createGroqJsonResponse({ systemPrompt, userPrompt, maxTokens = 10
     throw new Error('GROQ_API_KEY missing or not configured')
   }
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: 'llama-3.1-8b-instant',
-      max_tokens: maxTokens,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ]
+  const makeGroqRequest = async (useJsonMode) => {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        max_tokens: maxTokens,
+        temperature: 0.2,
+        ...(useJsonMode ? { response_format: { type: 'json_object' } } : {}),
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ]
+      })
     })
-  })
 
-  const data = await response.json()
+    const data = await response.json()
+    return { response, data }
+  }
+
+  const extractJsonObject = (text) => {
+    try {
+      return JSON.parse(text)
+    } catch (error) {
+      const start = text.indexOf('{')
+      const end = text.lastIndexOf('}')
+      if (start === -1 || end === -1 || end <= start) {
+        throw error
+      }
+
+      const candidate = text.slice(start, end + 1)
+      return JSON.parse(candidate)
+    }
+  }
+
+  let { response, data } = await makeGroqRequest(true)
+
+  if (!response.ok) {
+    const groqError = data?.error?.message || 'Groq request failed'
+    const shouldRetryWithoutJsonMode =
+      groqError.toLowerCase().includes('failed to generate json') ||
+      groqError.toLowerCase().includes('failed_generation')
+
+    if (shouldRetryWithoutJsonMode) {
+      console.warn('Groq JSON mode failed, retrying without strict JSON mode')
+      const retry = await makeGroqRequest(false)
+      response = retry.response
+      data = retry.data
+    }
+  }
+
   if (!response.ok) {
     throw new Error(data?.error?.message || 'Groq request failed')
   }
@@ -164,7 +245,7 @@ async function createGroqJsonResponse({ systemPrompt, userPrompt, maxTokens = 10
 
   return {
     rawText: responseText,
-    parsed: JSON.parse(responseText)
+    parsed: extractJsonObject(responseText)
   }
 }
 
@@ -251,69 +332,71 @@ app.post('/api/generate-avatar', async (req, res) => {
   }
 })
 
-// ENDPOINT 2 — Virtual try-on with Replicate IDM-VTON
+// ENDPOINT 2 — Virtual try-on with Hugging Face Leffa
 app.post('/api/try-on', async (req, res) => {
+  let avatarTempPath = null
+  let clothTempPath = null
   try {
     const { avatarUrl, clothImageUrl, category, clothName } = req.body
 
-    console.log('=== Virtual Try-On (IDM-VTON) ===')
+    console.log('=== Virtual Try-On (Hugging Face Leffa) ===')
     console.log({ avatarUrl, clothImageUrl, category, clothName })
 
-    if (!avatarUrl) throw new Error('No avatar URL provided')
-    if (!clothImageUrl) throw new Error('No cloth image URL provided')
-
-    // Map frontend category to IDM-VTON category ('upper_body', 'lower_body', 'dresses')
-    let idmCategory = 'upper_body'
-    const lowerCat = (category || '').toLowerCase()
-    
-    if (['bottom', 'lower_body', 'pants', 'shorts'].includes(lowerCat)) {
-      idmCategory = 'lower_body'
-    } else if (['dress', 'dresses', 'skirt'].includes(lowerCat)) {
-      idmCategory = 'dresses'
+    if (!avatarUrl) {
+      throw new Error('No avatar URL provided')
     }
 
-    const startResponse = await fetch(
-      'https://api.replicate.com/v1/predictions',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.REPLICATE_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'wait'
-        },
-        body: JSON.stringify({
-          version: 'e3893af4fb4bd5741752b35b395348c5f7a9ab5c4776264f5d38e41418081ed7',
-          input: {
-            garm_img: clothImageUrl,
-            human_img: avatarUrl,
-            category: idmCategory,
-            garment_des: clothName || (idmCategory === 'lower_body' ? 'shorts / pants' : 'shirt / top'),
-            crop: false,
-            steps: 30
-          }
-        })
-      }
+    if (!clothImageUrl) {
+      throw new Error('No cloth image URL provided')
+    }
+
+    let leffaGarmentType = 'upper_body'
+    const lowerCat = (category || '').toLowerCase()
+
+    if (['bottom', 'lower_body', 'pants', 'shorts', 'trousers', 'jeans'].includes(lowerCat)) {
+      leffaGarmentType = 'lower_body'
+    } else if (['dress', 'dresses', 'skirt'].includes(lowerCat)) {
+      leffaGarmentType = 'dresses'
+    }
+
+    const { handle_file } = await import('@gradio/client')
+    const client = await withTimeout(
+      getLeffaTryOnClient(),
+      15000,
+      'Hugging Face try-on service took too long to connect'
+    )
+    const randomSeed = Math.floor(Math.random() * 1000000)
+    avatarTempPath = await downloadImageToTempFile(avatarUrl, 'avatar')
+    clothTempPath = await downloadImageToTempFile(clothImageUrl, 'cloth')
+
+    const result = await withTimeout(
+      client.predict('/leffa_predict_vt', [
+        handle_file(avatarTempPath),
+        handle_file(clothTempPath),
+        false,
+        30,
+        2.5,
+        randomSeed,
+        'viton_hd',
+        leffaGarmentType,
+        false
+      ]),
+      90000,
+      'Hugging Face try-on timed out. The public queue is likely busy right now.'
     )
 
-    if (!startResponse.ok) {
-      const errData = await startResponse.json()
-      throw new Error(errData.detail || errData.error || JSON.stringify(errData))
-    }
+    const imageData = Array.isArray(result?.data)
+      ? result.data[0]
+      : Array.isArray(result)
+        ? result[0]
+        : result?.data?.[0]
+    const outputUrl =
+      imageData?.url ||
+      imageData?.path ||
+      (typeof imageData === 'string' ? imageData : null)
 
-    let result = await startResponse.json()
-    console.log('Try-On Prediction ID:', result.id)
-
-    if (result.status !== 'succeeded' && result.status !== 'failed') {
-      result = await waitForReplicatePrediction(result.id)
-    }
-
-    if (result.status === 'failed') {
-      throw new Error('Try-on failed: ' + (result.error || 'Unknown'))
-    }
-
-    const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output
     if (!outputUrl) {
-      throw new Error('No output image received from try-on')
+      throw new Error('No try-on image received from Hugging Face')
     }
 
     const outputImageResponse = await fetch(outputUrl)
@@ -329,12 +412,24 @@ app.post('/api/try-on', async (req, res) => {
     res.json({
       success: true,
       imageUrl: dataUrl,
-      provider: 'replicate',
-      space: 'cuuupid/idm-vton'
+      provider: 'huggingface',
+      space: 'franciszzj/Leffa'
     })
   } catch (err) {
-    console.error('Try-on error:', err.message)
-    res.status(500).json({ error: err.message })
+    const errorMessage =
+      err?.message ||
+      err?.error ||
+      err?.detail ||
+      (typeof err === 'string' ? err : JSON.stringify(err))
+
+    console.error('Try-on error:', errorMessage)
+    res.status(500).json({ error: errorMessage })
+  } finally {
+    await Promise.all(
+      [avatarTempPath, clothTempPath]
+        .filter(Boolean)
+        .map((filePath) => fs.unlink(filePath).catch(() => {}))
+    )
   }
 })
 
@@ -693,17 +788,21 @@ Respond with ONLY valid JSON. No markdown, no preamble.`
 
 const PORT = Number(process.env.PORT || 3001)
 
-const server = app.listen(PORT, () => {
-  console.log(`=== Backend running on http://localhost:${PORT} ===`)
-  console.log('Endpoints ready:')
-  console.log('  POST /api/generate-avatar')
-  console.log('  POST /api/try-on')
-  console.log('  POST /api/visual-search')
-  console.log('  POST /api/remove-bg')
-  console.log('  POST /api/generate-outfit')
-  console.log('  POST /api/discover-items')
-})
+if (!process.env.VERCEL) {
+  const server = app.listen(PORT, () => {
+    console.log(`=== Backend running on http://localhost:${PORT} ===`)
+    console.log('Endpoints ready:')
+    console.log('  POST /api/generate-avatar')
+    console.log('  POST /api/try-on')
+    console.log('  POST /api/visual-search')
+    console.log('  POST /api/remove-bg')
+    console.log('  POST /api/generate-outfit')
+    console.log('  POST /api/discover-items')
+  })
 
-server.on('error', (err) => {
-  console.error('Backend startup error:', err.message)
-})
+  server.on('error', (err) => {
+    console.error('Backend startup error:', err.message)
+  })
+}
+
+module.exports = app

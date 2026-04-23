@@ -1,6 +1,6 @@
 import { auth } from '../firebase/firebase'
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
 
 export default async function callBackend(path, body) {
   const user = auth.currentUser
