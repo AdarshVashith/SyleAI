@@ -24,6 +24,7 @@ console.log('SERPAPI_KEY:', process.env.SERPAPI_KEY ? 'SET' : 'MISSING')
 console.log('REMOVEBG_API_KEY:', process.env.REMOVEBG_API_KEY ? 'SET' : 'MISSING')
 console.log('REPLICATE_API_KEY:', process.env.REPLICATE_API_KEY ? 'SET' : 'MISSING')
 console.log('GROQ_API_KEY:', process.env.GROQ_API_KEY ? 'SET' : 'MISSING')
+console.log('GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? 'SET' : 'MISSING')
 
 const app = express()
 
@@ -123,16 +124,6 @@ async function waitForReplicatePrediction(predictionId) {
   throw new Error('Replicate prediction timed out')
 }
 
-async function getLeffaTryOnClient() {
-  if (!gradioClientPromise) {
-    gradioClientPromise = import('@gradio/client').then(async module => {
-      return module.Client.connect('franciszzj/Leffa')
-    })
-  }
-
-  return gradioClientPromise
-}
-
 function withTimeout(promise, ms, message) {
   return Promise.race([
     promise,
@@ -173,6 +164,95 @@ async function downloadImageToTempFile(imageUrl, prefix) {
 
   await fs.writeFile(tempFilePath, buffer)
   return tempFilePath
+}
+
+async function imageUrlToInlinePart(imageUrl, label = 'image') {
+  const response = await fetch(imageUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 StyleAI/1.0',
+      'Accept': 'image/*,*/*;q=0.8'
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error(`Could not download ${label} (${response.status})`)
+  }
+
+  const mimeType = response.headers.get('content-type') || 'image/jpeg'
+  if (!mimeType.startsWith('image/')) {
+    throw new Error(`${label} URL did not return an image`)
+  }
+
+  const buffer = await response.buffer()
+  return {
+    inlineData: {
+      mimeType,
+      data: buffer.toString('base64')
+    }
+  }
+}
+
+async function generateGeminiImage({ prompt, imageUrls }) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY missing or not configured')
+  }
+
+  const imageParts = await Promise.all(
+    imageUrls.filter(Boolean).map((url, index) => imageUrlToInlinePart(url, `image ${index + 1}`))
+  )
+
+  const response = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent',
+    {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': process.env.GEMINI_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              ...imageParts
+            ]
+          }
+        ],
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE']
+        }
+      })
+    }
+  )
+
+  const data = await response.json()
+  if (!response.ok) {
+    const geminiMessage = data?.error?.message || 'Gemini image generation failed'
+    const quotaExceeded =
+      response.status === 429 ||
+      geminiMessage.toLowerCase().includes('quota exceeded') ||
+      geminiMessage.toLowerCase().includes('rate limit')
+
+    const error = new Error(
+      quotaExceeded
+        ? 'Gemini image quota is exhausted right now. Please try again later or use a different key.'
+        : geminiMessage
+    )
+    error.statusCode = quotaExceeded ? 429 : response.status
+    error.rawMessage = geminiMessage
+    throw error
+  }
+
+  const parts = data?.candidates?.[0]?.content?.parts || []
+  const imagePart = parts.find((part) => part.inlineData?.data || part.inline_data?.data)
+
+  if (!imagePart) {
+    throw new Error('Gemini did not return an image')
+  }
+
+  const inlineData = imagePart.inlineData || imagePart.inline_data
+  const mimeType = inlineData.mimeType || inlineData.mime_type || 'image/png'
+  return `data:${mimeType};base64,${inlineData.data}`
 }
 
 async function createGroqJsonResponse({ systemPrompt, userPrompt, maxTokens = 1000 }) {
@@ -332,15 +412,13 @@ app.post('/api/generate-avatar', async (req, res) => {
   }
 })
 
-// ENDPOINT 2 — Virtual try-on with Hugging Face Leffa
+// ENDPOINT 2 — Virtual try-on with Gemini image editing
 app.post('/api/try-on', async (req, res) => {
-  let avatarTempPath = null
-  let clothTempPath = null
   try {
-    const { avatarUrl, clothImageUrl, category, clothName } = req.body
+    const { avatarUrl, clothImageUrl, category, clothName, gender } = req.body
 
-    console.log('=== Virtual Try-On (Hugging Face Leffa) ===')
-    console.log({ avatarUrl, clothImageUrl, category, clothName })
+    console.log('=== Virtual Try-On (Gemini) ===')
+    console.log({ avatarUrl, clothImageUrl, category, clothName, gender })
 
     if (!avatarUrl) {
       throw new Error('No avatar URL provided')
@@ -350,70 +428,30 @@ app.post('/api/try-on', async (req, res) => {
       throw new Error('No cloth image URL provided')
     }
 
-    let leffaGarmentType = 'upper_body'
-    const lowerCat = (category || '').toLowerCase()
+    const safeGender = String(gender || 'unspecified').toLowerCase()
+    const prompt = `You are editing a user's 2D avatar image to preview one clothing item realistically.
+Keep the person's face, body shape, pose, background, camera angle, and identity the same.
+Apply ONLY the provided ${category || 'garment'} from the reference garment image onto the avatar.
+The item is: ${clothName || 'selected garment'}.
+The user gender presentation is ${safeGender}.
+Preserve the garment's main color, silhouette, and visible details as closely as possible.
+Do not add extra accessories, props, new people, or change the hairstyle.
+Return a polished fashion preview image only.`
 
-    if (['bottom', 'lower_body', 'pants', 'shorts', 'trousers', 'jeans'].includes(lowerCat)) {
-      leffaGarmentType = 'lower_body'
-    } else if (['dress', 'dresses', 'skirt'].includes(lowerCat)) {
-      leffaGarmentType = 'dresses'
-    }
-
-    const { handle_file } = await import('@gradio/client')
-    const client = await withTimeout(
-      getLeffaTryOnClient(),
-      15000,
-      'Hugging Face try-on service took too long to connect'
-    )
-    const randomSeed = Math.floor(Math.random() * 1000000)
-    avatarTempPath = await downloadImageToTempFile(avatarUrl, 'avatar')
-    clothTempPath = await downloadImageToTempFile(clothImageUrl, 'cloth')
-
-    const result = await withTimeout(
-      client.predict('/leffa_predict_vt', [
-        handle_file(avatarTempPath),
-        handle_file(clothTempPath),
-        false,
-        30,
-        2.5,
-        randomSeed,
-        'viton_hd',
-        leffaGarmentType,
-        false
-      ]),
+    const dataUrl = await withTimeout(
+      generateGeminiImage({
+        prompt,
+        imageUrls: [avatarUrl, clothImageUrl]
+      }),
       90000,
-      'Hugging Face try-on timed out. The public queue is likely busy right now.'
+      'Gemini virtual try-on timed out. Please try again.'
     )
-
-    const imageData = Array.isArray(result?.data)
-      ? result.data[0]
-      : Array.isArray(result)
-        ? result[0]
-        : result?.data?.[0]
-    const outputUrl =
-      imageData?.url ||
-      imageData?.path ||
-      (typeof imageData === 'string' ? imageData : null)
-
-    if (!outputUrl) {
-      throw new Error('No try-on image received from Hugging Face')
-    }
-
-    const outputImageResponse = await fetch(outputUrl)
-    if (!outputImageResponse.ok) {
-      throw new Error(`Could not download try-on image (${outputImageResponse.status})`)
-    }
-
-    const mimeType = outputImageResponse.headers.get('content-type') || 'image/webp'
-    const outputImageBuffer = await outputImageResponse.arrayBuffer()
-    const base64Image = Buffer.from(outputImageBuffer).toString('base64')
-    const dataUrl = `data:${mimeType};base64,${base64Image}`
 
     res.json({
       success: true,
       imageUrl: dataUrl,
-      provider: 'huggingface',
-      space: 'franciszzj/Leffa'
+      provider: 'gemini',
+      model: 'gemini-2.5-flash-image'
     })
   } catch (err) {
     const errorMessage =
@@ -422,14 +460,81 @@ app.post('/api/try-on', async (req, res) => {
       err?.detail ||
       (typeof err === 'string' ? err : JSON.stringify(err))
 
-    console.error('Try-on error:', errorMessage)
-    res.status(500).json({ error: errorMessage })
-  } finally {
-    await Promise.all(
-      [avatarTempPath, clothTempPath]
-        .filter(Boolean)
-        .map((filePath) => fs.unlink(filePath).catch(() => {}))
+    console.error('Try-on error:', err?.rawMessage || errorMessage)
+    res.status(err?.statusCode || 500).json({
+      error: errorMessage,
+      provider: 'gemini'
+    })
+  }
+})
+
+// ENDPOINT 2B — Full outfit preview with Gemini image editing
+app.post('/api/generate-outfit-preview', async (req, res) => {
+  try {
+    const { avatarUrl, items, occasion, timeOfDay, vibe, gender } = req.body
+
+    if (!avatarUrl) {
+      throw new Error('No avatar URL provided')
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('No outfit items provided')
+    }
+
+    const validItems = items.filter((item) => item?.imageUrl)
+    if (validItems.length === 0) {
+      throw new Error('Outfit items are missing image URLs')
+    }
+
+    const itemLines = validItems.map((item) =>
+      `- ${item.category || 'Item'}: ${item.name || 'Unnamed'} | Color: ${item.color || 'unknown'} | Brand: ${item.brand || 'unknown'}`
+    ).join('\n')
+
+    const prompt = `You are editing a user's 2D avatar image to show a complete outfit preview.
+Keep the person's face, body shape, skin tone, pose, stance, and background exactly the same.
+Apply ALL provided outfit items together onto the avatar as one cohesive look.
+The user gender presentation is ${String(gender || 'unspecified').toLowerCase()}.
+Occasion: ${occasion || 'unspecified'}.
+Time of day: ${timeOfDay || 'unspecified'}.
+Vibe: ${vibe || 'stylish everyday'}.
+
+Use these exact pieces:
+${itemLines}
+
+Rules:
+- Every available upper wear, bottom wear, and shoes reference must be visibly represented on the avatar.
+- Preserve the clothing colors and overall silhouettes closely.
+- Do not remove body parts, crop the figure, change the hairstyle, or change the person's identity.
+- Keep the result as a realistic 2D fashion preview image of the same person wearing the selected outfit.
+- Return only the edited image.`
+
+    const dataUrl = await withTimeout(
+      generateGeminiImage({
+        prompt,
+        imageUrls: [avatarUrl, ...validItems.map((item) => item.imageUrl)]
+      }),
+      90000,
+      'Gemini outfit preview timed out. Please try again.'
     )
+
+    res.json({
+      success: true,
+      imageUrl: dataUrl,
+      provider: 'gemini',
+      model: 'gemini-2.5-flash-image'
+    })
+  } catch (err) {
+    const errorMessage =
+      err?.message ||
+      err?.error ||
+      err?.detail ||
+      (typeof err === 'string' ? err : JSON.stringify(err))
+
+    console.error('Outfit preview error:', err?.rawMessage || errorMessage)
+    res.status(err?.statusCode || 500).json({
+      error: errorMessage,
+      provider: 'gemini'
+    })
   }
 })
 

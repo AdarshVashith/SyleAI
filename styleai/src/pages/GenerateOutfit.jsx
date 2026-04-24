@@ -10,6 +10,7 @@ const OCCASIONS = ['Casual', 'Work', 'Date Night', 'Party',
 const TIMES = ['Morning', 'Afternoon', 'Evening', 'Night']
 
 export default function GenerateOutfit() {
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
   const navigate = useNavigate()
 
   // Auth & data
@@ -28,6 +29,9 @@ export default function GenerateOutfit() {
   const [screen, setScreen] = useState('form')
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [outfitPreviewUrl, setOutfitPreviewUrl] = useState(null)
+  const [outfitPreviewLoading, setOutfitPreviewLoading] = useState(false)
+  const [outfitPreviewError, setOutfitPreviewError] = useState('')
 
   // Load user, profile, wardrobe, weather
   useEffect(() => {
@@ -62,6 +66,45 @@ export default function GenerateOutfit() {
     return () => unsub()
   }, [navigate])
 
+  useEffect(() => {
+    const generateOutfitPreview = async () => {
+      if (screen !== 'result' || !result?.items?.length || !profile?.avatarUrl) return
+
+      setOutfitPreviewLoading(true)
+      setOutfitPreviewError('')
+      setOutfitPreviewUrl(null)
+
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/generate-outfit-preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            avatarUrl: profile.avatarUrl,
+            items: result.items,
+            occasion,
+            timeOfDay,
+            vibe,
+            gender: profile?.gender || ''
+          })
+        })
+
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Failed to generate outfit preview')
+        }
+
+        setOutfitPreviewUrl(data.imageUrl)
+      } catch (previewError) {
+        console.error('Outfit preview error:', previewError)
+        setOutfitPreviewError(previewError.message || 'Failed to generate outfit preview')
+      } finally {
+        setOutfitPreviewLoading(false)
+      }
+    }
+
+    generateOutfitPreview()
+  }, [screen, result, profile?.avatarUrl, profile?.gender, occasion, timeOfDay, vibe])
+
   const handleGenerate = async () => {
     if (!occasion || !timeOfDay) return
     if (wardrobe.length === 0) {
@@ -72,6 +115,8 @@ export default function GenerateOutfit() {
     setScreen('loading')
     setError(null)
     setResult(null)
+    setOutfitPreviewUrl(null)
+    setOutfitPreviewError('')
 
     try {
       const getSkinToneAdvice = (hex) => {
@@ -362,6 +407,47 @@ Return ONLY this JSON (no markdown, no extra text):
               {occasion} · {timeOfDay}
             </p>
             <h2 className="text-2xl font-bold">{result.outfitName}</h2>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-100 p-4">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
+              Outfit On Your Avatar
+            </p>
+            <div className="rounded-2xl overflow-hidden bg-gray-50 border border-gray-100 min-h-[280px] flex items-center justify-center">
+              {outfitPreviewLoading ? (
+                <div className="py-16 text-center">
+                  <div className="w-10 h-10 border-4 border-gray-200 border-t-black rounded-full animate-spin mx-auto mb-3"/>
+                  <p className="text-sm font-semibold text-gray-700">
+                    Applying full outfit to your 2D avatar...
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Gemini is combining your top, bottom, and shoes
+                  </p>
+                </div>
+              ) : outfitPreviewUrl ? (
+                <img
+                  src={outfitPreviewUrl}
+                  alt="Outfit preview on avatar"
+                  className="w-full object-contain"
+                  style={{ maxHeight: '560px' }}
+                />
+              ) : (
+                <div className="px-6 py-12 text-center">
+                  <div className="text-4xl mb-3">🧍</div>
+                  <p className="text-sm font-semibold text-gray-700">
+                    Preview unavailable
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {outfitPreviewError || 'Could not generate the outfit preview right now.'}
+                  </p>
+                </div>
+              )}
+            </div>
+            {outfitPreviewError ? (
+              <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600">
+                {outfitPreviewError}
+              </div>
+            ) : null}
           </div>
 
           <div style={{

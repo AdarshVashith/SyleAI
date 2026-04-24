@@ -42,7 +42,8 @@ export default function TryOnModal({
           avatarUrl,
           clothImageUrl: currentCloth.imageUrl,
           category: currentCloth.category,
-          clothName: currentCloth.name
+          clothName: currentCloth.name,
+          gender: auth.currentUser?.gender || undefined
         })
       })
 
@@ -134,8 +135,8 @@ export default function TryOnModal({
               <h2 style={{ fontSize: '20px', fontWeight: '600', margin: 0 }}>
                 AI try on
               </h2>
-              <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#6b7280' }}>
-                Hugging Face virtual try-on is generating a wrapped outfit on your avatar.
+                <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#6b7280' }}>
+                Gemini is generating a styled preview of this garment on your 2D avatar.
               </p>
             </div>
             <button

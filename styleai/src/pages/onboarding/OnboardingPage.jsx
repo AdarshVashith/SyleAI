@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { Navigate, useNavigate } from "react-router-dom";
+import { doc, getDoc } from "firebase/firestore";
 import BodyDetailsStep from "../../components/BodyDetailsStep";
 import ImageUploadStep from "../../components/ImageUploadStep";
-import { auth } from "../../firebase/firebase";
+import { auth, db } from "../../firebase/firebase";
 import FaceScan from "./FaceScan";
 
 function OnboardingPage() {
@@ -14,8 +15,39 @@ function OnboardingPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
+      
+      if (nextUser) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", nextUser.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            
+            // If face scan is already done, set faceScanResult
+            if (data.facePhotoUrl) {
+              setFaceScanResult({
+                facePhotoUrl: data.facePhotoUrl,
+                skinTone: data.skinTone,
+                faceShape: data.faceShape,
+                dominantExpression: data.dominantExpression,
+                faceScanDone: true
+              });
+            }
+
+            // Restore body photos step progress
+            if (data.bodyPhotoUrls && data.bodyPhotoUrls.length > 0) {
+              setBodyPhotos(data.bodyPhotoUrls);
+            }
+
+            // If onboarding is completely done but no avatar yet, 
+            // the user should probably be on step 3 (handled by logic below)
+          }
+        } catch (error) {
+          console.error("Error loading onboarding progress:", error);
+        }
+      }
+      
       setLoadingAuth(false);
     });
 
