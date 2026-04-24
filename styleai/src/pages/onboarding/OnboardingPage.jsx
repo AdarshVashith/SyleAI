@@ -40,8 +40,11 @@ function OnboardingPage() {
               setBodyPhotos(data.bodyPhotoUrls);
             }
 
-            // If onboarding is completely done but no avatar yet, 
-            // the user should probably be on step 3 (handled by logic below)
+            // If avatar already exists, skip onboarding entirely and go home
+            if (data.avatarUrl) {
+              navigate("/home", { replace: true });
+              return;
+            }
           }
         } catch (error) {
           console.error("Error loading onboarding progress:", error);
