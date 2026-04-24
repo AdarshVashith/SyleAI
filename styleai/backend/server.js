@@ -202,7 +202,7 @@ async function generateGeminiImage({ prompt, imageUrls }) {
   )
 
   const response = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent',
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
     {
       method: 'POST',
       headers: {
@@ -451,7 +451,7 @@ Return a polished fashion preview image only.`
       success: true,
       imageUrl: dataUrl,
       provider: 'gemini',
-      model: 'gemini-2.5-flash-image'
+      model: 'gemini-2.0-flash'
     })
   } catch (err) {
     const errorMessage =
@@ -521,7 +521,7 @@ Rules:
       success: true,
       imageUrl: dataUrl,
       provider: 'gemini',
-      model: 'gemini-2.5-flash-image'
+      model: 'gemini-2.0-flash'
     })
   } catch (err) {
     const errorMessage =
