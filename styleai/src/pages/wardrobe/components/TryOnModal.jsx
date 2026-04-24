@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { auth } from '../../../firebase/firebase'
 import { saveToWishlist } from '../../Wishlist'
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
 
 export default function TryOnModal({
   avatarUrl,

@@ -10,7 +10,7 @@ const OCCASIONS = ['Casual', 'Work', 'Date Night', 'Party',
 const TIMES = ['Morning', 'Afternoon', 'Evening', 'Night']
 
 export default function GenerateOutfit() {
-  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
   const navigate = useNavigate()
 
   // Auth & data

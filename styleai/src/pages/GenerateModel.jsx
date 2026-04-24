@@ -5,7 +5,7 @@ import { db, auth } from '../firebase/firebase'
 import { useNavigate } from 'react-router-dom'
 import { uploadToCloudinary } from '../utils/cloudinary'
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:3001'
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
 
 export default function GenerateModel() {
   const navigate = useNavigate()
